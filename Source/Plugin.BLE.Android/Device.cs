@@ -38,6 +38,16 @@ namespace Plugin.BLE.Android
         /// </summary>
         private CancellationTokenRegistration _connectCancellationTokenRegistration;
 
+        /* laird additions */
+        private bool initialConnection;
+        private readonly object bleLock = new object();
+        /*
+            * This flag is set to false only when the {@link #shouldAutoConnect()} method returns true and the device got disconnected without calling {@link #disconnect()} method.
+            * If {@link #shouldAutoConnect()} returns false (default) this is always set to true.
+        */
+        private bool userDisconnected;
+        /* ^^^^^^^^^^ */
+
         public Device(Adapter adapter, BluetoothDevice nativeDevice, BluetoothGatt gatt, int rssi, byte[] advertisementData = null) : base(adapter)
         {
             Update(nativeDevice, gatt);
@@ -83,6 +93,94 @@ namespace Plugin.BLE.Android
                 }),
                 subscribeReject: handler => _gattCallback.ConnectionInterrupted += handler,
                 unsubscribeReject: handler => _gattCallback.ConnectionInterrupted -= handler);
+        }
+
+        /*
+	         * Returns whether to connect to the remote device just once (false) or to add the address to white list of devices
+	         * that will be automatically connect as soon as they become available (true). In the latter case, if
+	         * Bluetooth adapter is enabled, Android scans periodically for devices from the white list and if a advertising packet
+	         * is received from such, it tries to connect to it. When the connection is lost, the system will keep trying to reconnect
+	         * to it in. If true is returned, and the connection to the device is lost the {@link BleManagerCallbacks#onLinklossOccurred(BluetoothDevice)}
+	         * callback is called instead of {@link BleManagerCallbacks#onDeviceDisconnected(BluetoothDevice)}.
+	         * <p>This feature works much better on newer Android phone models and many not work on older phones.</p>
+	         * <p>This method should only be used with bonded devices, as otherwise the device may change it's address.
+	         * It will however work also with non-bonded devices with private static address. A connection attempt to
+	         * a device with private resolvable address will fail.</p>
+	         * <p>The first connection to a device will always be created with autoConnect flag to false
+	         * (see {@link BluetoothDevice#connectGatt(Context, boolean, BluetoothGattCallback)}). This is to make it quick as the
+	         * user most probably waits for a quick response. However, if this method returned true during first connection and the link was lost,
+	         * the manager will try to reconnect to it using {@link BluetoothGatt#connect()} which forces autoConnect to true .</p>
+	         *
+	         * @return autoConnect flag value
+	    */
+        protected bool shouldAutoConnect()
+        {
+            return false;
+        }
+
+        /// <summary>
+        /// Updated Connect function based on Nordic Semi nrf toolbox
+        /// https://github.com/NordicSemiconductor/Android-nRF-Toolbox
+        /// </summary>
+        /// <param name="connectParameters"></param>
+        /// <param name="cancellationToken"></param>
+        public void ConnectV2(ConnectParameters connectParameters, CancellationToken cancellationToken)
+        {
+            try
+            {
+                System.Diagnostics.Trace.WriteLine("Device.cs bleLockWait()");
+                lock (bleLock)
+                {
+                    if (_gatt != null)
+                    {
+                        // There are 2 ways of reconnecting to the same device:
+                        // 1. Reusing the same BluetoothGatt object and calling connect() - this will force the autoConnect flag to true
+                        // 2. Closing it and reopening a new instance of BluetoothGatt object.
+                        // The gatt.close() is an asynchronous method. It requires some time before it's finished and
+                        // device.connectGatt(...) can't be called immediately or service discovery
+                        // may never finish on some older devices (Nexus 4, Android 5.0.1).
+                        // If shouldAutoConnect() method returned false we can't call gatt.connect() and have to close gatt and open it again.
+                        if (!initialConnection)
+                        {
+                            System.Diagnostics.Trace.WriteLine("Device.cs !initialConnection");
+                            _gatt.Close();
+                            _gatt = null;
+                            Thread.Sleep(200);
+                        }
+                        else
+                        {
+                            // Instead, the gatt.connect() method will be used to reconnect to the same device.
+                            // This method forces autoConnect = true even if the gatt was created with this flag set to false.
+                            initialConnection = false;
+                            System.Diagnostics.Trace.WriteLine("Device.cs _gatt.Connect()");
+                            _gatt.Connect();
+                            return;
+                        }
+                    }
+
+                    bool autoConnect = shouldAutoConnect();
+                    // We will receive Linkloss events only when the device is connected with autoConnect=true
+                    // The first connection will always be done with autoConnect = false to make the connection quick.
+                    // If the shouldAutoConnect() method returned true, the manager will automatically try to reconnect to this device on link loss.
+                    userDisconnected = !autoConnect;
+                    if (autoConnect)
+                    {
+                        initialConnection = true;
+                    }
+                    System.Diagnostics.Trace.WriteLine("Device.cs BluetoothDevice.ConnectGatt");
+                    var connectGatt = BluetoothDevice.ConnectGatt(Application.Context, false, _gattCallback, BluetoothTransports.Le);
+                    _connectCancellationTokenRegistration.Dispose();
+                    _connectCancellationTokenRegistration = cancellationToken.Register(() => DisconnectAndClose(connectGatt));
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine(ex.ToString());
+            }
+            finally
+            {
+                
+            }
         }
 
         public void Connect(ConnectParameters connectParameters, CancellationToken cancellationToken)
@@ -133,6 +231,7 @@ namespace Plugin.BLE.Android
 
         private void DisconnectAndClose(BluetoothGatt gatt)
         {
+            System.Diagnostics.Trace.WriteLine("DisconnectAndClose");
             gatt.Disconnect();
             gatt.Close();
         }
@@ -143,6 +242,9 @@ namespace Plugin.BLE.Android
         /// </summary>
         public void Disconnect()
         {
+            userDisconnected = true;
+            initialConnection = false;
+
             if (_gatt != null)
             {
                 IsOperationRequested = true;

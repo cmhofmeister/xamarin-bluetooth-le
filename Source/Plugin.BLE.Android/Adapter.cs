@@ -14,6 +14,8 @@ using Plugin.BLE.Extensions;
 using Object = Java.Lang.Object;
 using Trace = Plugin.BLE.Abstractions.Trace;
 using Android.App;
+using Plugin.BLE.BroadcastReceivers;
+using Android.Content;
 
 namespace Plugin.BLE.Android
 {
@@ -23,6 +25,7 @@ namespace Plugin.BLE.Android
         private readonly BluetoothAdapter _bluetoothAdapter;
         private readonly Api18BleScanCallback _api18ScanCallback;
         private readonly Api21BleScanCallback _api21ScanCallback;
+        
 
         public Adapter(BluetoothManager bluetoothManager)
         {
@@ -30,16 +33,14 @@ namespace Plugin.BLE.Android
             _bluetoothAdapter = bluetoothManager.Adapter;
 
 
-            // TODO: bonding
-            //var bondStatusBroadcastReceiver = new BondStatusBroadcastReceiver();
-            //Application.Context.RegisterReceiver(bondStatusBroadcastReceiver,
-            //    new IntentFilter(BluetoothDevice.ActionBondStateChanged));
+            var bondStatusBroadcastReceiver = new BondStatusBroadcastReceiver();
+            Application.Context.RegisterReceiver(bondStatusBroadcastReceiver,
+            new IntentFilter(BluetoothDevice.ActionBondStateChanged));
 
-            ////forward events from broadcast receiver
-            //bondStatusBroadcastReceiver.BondStateChanged += (s, args) =>
-            //{
-            //    //DeviceBondStateChanged(this, args);
-            //};
+            bondStatusBroadcastReceiver.BondStateChanged += (s, args) =>
+            {
+                HandleDeviceBondStateChanged(args);
+            };
 
             if (Build.VERSION.SdkInt >= BuildVersionCodes.Lollipop)
             {
@@ -138,7 +139,7 @@ namespace Plugin.BLE.Android
         protected override Task ConnectToDeviceNativeAsync(IDevice device, ConnectParameters connectParameters,
             CancellationToken cancellationToken)
         {
-            ((Device)device).Connect(connectParameters, cancellationToken);
+            ((Device)device).ConnectV2(connectParameters, cancellationToken);
             return Task.CompletedTask;
         }
 
@@ -187,7 +188,6 @@ namespace Plugin.BLE.Android
             }
         }
 
-
         public class Api18BleScanCallback : Object, BluetoothAdapter.ILeScanCallback
         {
             private readonly Adapter _adapter;
@@ -204,7 +204,6 @@ namespace Plugin.BLE.Android
                 _adapter.HandleDiscoveredDevice(new Device(_adapter, bleDevice, null, rssi, scanRecord));
             }
         }
-
 
         public class Api21BleScanCallback : ScanCallback
         {
@@ -272,6 +271,7 @@ namespace Plugin.BLE.Android
 
             }
         }
+       
     }
 }
 
