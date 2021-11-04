@@ -37,11 +37,6 @@ namespace Plugin.BLE.Android
             Application.Context.RegisterReceiver(bondStatusBroadcastReceiver,
             new IntentFilter(BluetoothDevice.ActionBondStateChanged));
 
-            bondStatusBroadcastReceiver.BondStateChanged += (s, args) =>
-            {
-                HandleDeviceBondStateChanged(args);
-            };
-
             if (Build.VERSION.SdkInt >= BuildVersionCodes.Lollipop)
             {
                 _api21ScanCallback = new Api21BleScanCallback(this);
